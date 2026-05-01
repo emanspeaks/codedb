@@ -16,6 +16,7 @@ const std = @import("std");
 const Store = @import("store.zig").Store;
 const Explorer = @import("explore.zig").Explorer;
 const watcher = @import("watcher.zig");
+const compat = @import("compat.zig");
 
 // ── CLI args ──────────────────────────────────────────────────────────────────
 
@@ -283,7 +284,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const args = try parseArgs(alloc);
     defer if (!std.mem.eql(u8, args.root, ".")) alloc.free(args.root);
 
-    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var root_buf: [compat.path_buf_size]u8 = undefined;
     const root: []const u8 = blk: {
         const n = std.Io.Dir.cwd().realPathFile(io, args.root, &root_buf) catch break :blk args.root;
         break :blk root_buf[0..n];

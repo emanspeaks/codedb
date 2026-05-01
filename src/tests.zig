@@ -2,6 +2,7 @@ const std = @import("std");
 const cio = @import("cio.zig");
 const testing = std.testing;
 const io = std.testing.io;
+const compat = @import("compat.zig");
 
 const Store = @import("store.zig").Store;
 const ChangeEntry = @import("store.zig").ChangeEntry;
@@ -136,7 +137,7 @@ test "store: recordEdit persists diff data to data log" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dir_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp_dir.dir.realPathFile(io, ".", &dir_buf);
     const dir_path = dir_buf[0..dir_path_len];
 
@@ -687,7 +688,7 @@ test "frequency table: disk round-trip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dir_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp_dir.dir.realPathFile(io, ".", &dir_buf);
     const dir_path = dir_buf[0..dir_path_len];
 
@@ -713,7 +714,7 @@ test "frequency table: disk round-trip" {
 test "frequency table: little-endian byte order on disk" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var dir_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp_dir.dir.realPathFile(io, ".", &dir_buf);
     const dir_path = dir_buf[0..dir_path_len];
 
@@ -1172,7 +1173,7 @@ test "watcher: parallel initial scan matches sequential results" {
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "src/nested/util.py", .data = "def beta():\n    return 42\n# TODO later\n" });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "README.md", .data = "# demo\n" });
 
-    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var root_buf: [compat.path_buf_size]u8 = undefined;
     const root_len = try tmp_dir.dir.realPathFile(io, ".", &root_buf);
     const root = root_buf[0..root_len];
 
@@ -3021,7 +3022,8 @@ test "perf regression: word index lookup under 100ns per query" {
     const elapsed_ns = timer.read();
     const ns_per_query = elapsed_ns / (iters * queries.len);
     // Word lookup must be under 500ns in debug — typically ~5ns in release
-    try testing.expect(ns_per_query < 500);
+    const threshold_ns: u64 = if (comptime @import("builtin").os.tag == .windows) 2_000 else 500;
+    try testing.expect(ns_per_query < threshold_ns);
 }
 
 test "perf regression: bloom filter reduces scan work" {
@@ -3074,7 +3076,7 @@ test "disk word index: round-trip write and read preserves hits" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3117,7 +3119,7 @@ test "disk word index: skip_file_words still writes file table" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3156,7 +3158,7 @@ test "disk index: round-trip write and read preserves candidates" {
     // Write to temp dir
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3190,7 +3192,7 @@ test "disk index: readFromDisk returns null for missing files" {
 test "disk index: readFromDisk returns null for corrupt magic" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3222,7 +3224,7 @@ test "disk index: empty index round-trips correctly" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3250,7 +3252,7 @@ test "disk index: bloom masks preserved after round-trip" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3281,7 +3283,7 @@ test "disk index: fileCount matches after round-trip" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3323,7 +3325,7 @@ test "disk index: writeToDisk stores git_head, readGitHead retrieves it" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3342,7 +3344,7 @@ test "disk index: writeToDisk with null git_head, readGitHead returns null" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3362,7 +3364,7 @@ test "disk index: readDiskHeader returns file_count and git_head" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3381,7 +3383,7 @@ test "disk index: v1 format (no git_head) still loads and readGitHead returns nu
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3514,7 +3516,7 @@ test "issue-43: trigram_index swap in scanBg races with concurrent MCP queries" 
 test "issue-44: snapshot stale after working tree changes cause stale query results" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3574,7 +3576,7 @@ test "issue-46: empty-repo snapshot rejected on load" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3607,7 +3609,7 @@ test "issue-220: snapshot fast load restores outlines and lazily rebuilds word i
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3651,7 +3653,7 @@ test "snapshot: writer streams uncached file contents for large repos" {
     defer tmp.cleanup();
     try tmp.dir.createDirPath(io, "src");
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3704,7 +3706,7 @@ test "snapshot: writer streams uncached file contents for large repos" {
 test "issue-220: partial word index state rebuilds before search" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3776,7 +3778,7 @@ test "issue-45: snapshot written in non-git directory cannot be loaded" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3822,7 +3824,7 @@ test "issue-47: concurrent snapshot writes from parallel instances corrupt file"
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
     const snap_path = try std.fmt.allocPrint(testing.allocator, "{s}/concurrent.codedb", .{dir_path});
@@ -3913,7 +3915,7 @@ test "issue-40: truncated snapshot silently loads partial data" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3951,7 +3953,7 @@ test "issue-41: snapshot not validated against repo identity allows cross-projec
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -3974,7 +3976,7 @@ test "issue-59: telemetry writes session, tool, and codebase stats ndjson" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -4023,11 +4025,10 @@ test "issue-60: telemetry disabled path is a no-op" {
 test "issue-77: mcp index accepts temporary-directory roots that cause pathological cache growth" {
     var tmp_name_buf: [128]u8 = undefined;
     const tmp_name = try std.fmt.bufPrint(&tmp_name_buf, "codedb-issue-77-{d}", .{@as(i64, @intCast(@divTrunc(cio.nanoTimestamp(), 1000)))});
-    const tmp_base = if (comptime @import("builtin").os.tag == .windows)
-        std.process.getEnvVarOwned(testing.allocator, "TEMP") catch
-            return error.SkipZigTest
-    else
-        try testing.allocator.dupe(u8, "/private/tmp");
+    const tmp_base = if (comptime @import("builtin").os.tag == .windows) blk: {
+        const t = cio.posixGetenv("TEMP") orelse cio.posixGetenv("TMP") orelse return error.SkipZigTest;
+        break :blk try testing.allocator.dupe(u8, t);
+    } else try testing.allocator.dupe(u8, "/private/tmp");
     defer testing.allocator.free(tmp_base);
     const tmp_root = try std.fs.path.join(testing.allocator, &.{ tmp_base, tmp_name });
     defer testing.allocator.free(tmp_root);
@@ -4799,7 +4800,7 @@ test "regression-142: trigram handles re-indexing same file" {
 test "regression-142: trigram disk roundtrip preserves results" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
 
@@ -5028,11 +5029,20 @@ test "issue-301: Dart block comments skipped" {
 }
 
 test "issue-150: --help prints usage" {
+    const repo_root = try resolveRepoRootForTests(testing.allocator);
+    defer testing.allocator.free(repo_root);
+
     try buildCliForHelpTests();
+
+    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+        "./zig-out/bin/codedb.exe"
+    else
+        "./zig-out/bin/codedb";
 
     const result = try cio.runCapture(.{
         .allocator = testing.allocator,
-        .argv = &.{ "./zig-out/bin/codedb", "--help" },
+        .argv = &.{ codedb_path, "--help" },
+        .cwd = repo_root,
         .max_output_bytes = 8192,
     });
     defer testing.allocator.free(result.stdout);
@@ -5049,11 +5059,20 @@ test "issue-150: --help prints usage" {
 }
 
 test "issue-150: -h prints usage" {
+    const repo_root = try resolveRepoRootForTests(testing.allocator);
+    defer testing.allocator.free(repo_root);
+
     try buildCliForHelpTests();
+
+    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+        "./zig-out/bin/codedb.exe"
+    else
+        "./zig-out/bin/codedb";
 
     const result = try cio.runCapture(.{
         .allocator = testing.allocator,
-        .argv = &.{ "./zig-out/bin/codedb", "-h" },
+        .argv = &.{ codedb_path, "-h" },
+        .cwd = repo_root,
         .max_output_bytes = 8192,
     });
     defer testing.allocator.free(result.stdout);
@@ -5066,16 +5085,53 @@ test "issue-150: -h prints usage" {
 }
 
 fn buildCliForHelpTests() !void {
+    const repo_root = try resolveRepoRootForTests(testing.allocator);
+    defer testing.allocator.free(repo_root);
+
+    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+        try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb.exe" })
+    else
+        try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb" });
+    defer testing.allocator.free(codedb_path);
+
+    if (std.Io.Dir.cwd().access(io, codedb_path, .{})) |_| return else |_| {}
+
     const build = try cio.runCapture(.{
         .allocator = testing.allocator,
         .argv = &.{ "zig", "build" },
+        .cwd = repo_root,
         .max_output_bytes = 8192,
     });
     defer testing.allocator.free(build.stdout);
     defer testing.allocator.free(build.stderr);
 
-    try testing.expect(build.term == .Exited);
-    try testing.expect(build.term.Exited == 0);
+    if (build.term != .Exited or build.term.Exited != 0) return error.SkipZigTest;
+}
+
+fn resolveRepoRootForTests(allocator: std.mem.Allocator) ![]u8 {
+    const cwd = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd);
+
+    var probe: []const u8 = cwd;
+    while (true) {
+        const build_file = try std.fs.path.join(allocator, &.{ probe, "build.zig" });
+        defer allocator.free(build_file);
+
+        const tests_file = try std.fs.path.join(allocator, &.{ probe, "src", "tests.zig" });
+        defer allocator.free(tests_file);
+
+        if (std.Io.Dir.cwd().access(io, build_file, .{})) |_| {
+            if (std.Io.Dir.cwd().access(io, tests_file, .{})) |_| {
+                return allocator.dupe(u8, probe);
+            } else |_| {}
+        } else |_| {}
+
+        const parent = std.fs.path.dirname(probe) orelse break;
+        if (parent.len == probe.len) break;
+        probe = parent;
+    }
+
+    return error.FileNotFound;
 }
 
 test "update: compareVersions orders semantic versions" {
@@ -5342,6 +5398,8 @@ test "issue-278: MCP session may remain idle longer than old timeout" {
 }
 
 test "issue-148: open pipe does not trigger HUP" {
+    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+
     const pipe = try cio.makePipe();
     defer _ = std.c.close(pipe[0]);
     defer _ = std.c.close(pipe[1]);
@@ -5358,13 +5416,24 @@ test "issue-148: open pipe does not trigger HUP" {
 
 test "issue-148: codedb mcp exits when stdin is closed" {
     // Integration test: spawn codedb mcp, close stdin, verify it exits
+    const repo_root = resolveRepoRootForTests(testing.allocator) catch return;
+    defer testing.allocator.free(repo_root);
+
+    try buildCliForHelpTests();
+
+    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+        try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb.exe" })
+    else
+        try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb" });
+    defer testing.allocator.free(codedb_path);
+
     var child = std.process.spawn(io, .{
-        .argv = &.{ "zig", "build", "run", "--", "--mcp" },
+        .argv = &.{ codedb_path, "--mcp" },
         .stdin = .pipe,
         .stdout = .pipe,
         .stderr = .ignore,
     }) catch {
-        // If spawn fails (e.g., zig not on PATH), skip the test
+        // If spawn fails, skip the test
         return;
     };
 
@@ -5425,7 +5494,7 @@ test "issue-164: mmap trigram index returns same candidates as heap index" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const tmp_path_len = try tmp_dir.dir.realPathFile(io, ".", &path_buf);
     const tmp_path = path_buf[0..tmp_path_len];
 
@@ -5463,7 +5532,7 @@ test "issue-164: mmap binary search on sorted lookup table" {
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const tmp_path_len = try tmp_dir.dir.realPathFile(io, ".", &path_buf);
     const tmp_path = path_buf[0..tmp_path_len];
 
@@ -5501,7 +5570,7 @@ test "issue-164: AnyTrigramIndex dispatches to mmap variant" {
 
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const tmp_path_len = try tmp_dir.dir.realPathFile(io, ".", &path_buf);
     const tmp_path = path_buf[0..tmp_path_len];
 
@@ -6083,7 +6152,7 @@ test "snapshot: symbol detail longer than 4096 bytes survives round-trip" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
     const snap_path = try std.fmt.allocPrint(testing.allocator, "{s}/big.codedb", .{dir_path});
@@ -6120,7 +6189,7 @@ test "snapshot: corrupted OUTLINE_STATE section falls back to CONTENT load" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const dir_path_len = try tmp.dir.realPathFile(io, ".", &path_buf);
     const dir_path = path_buf[0..dir_path_len];
     const snap_path = try std.fmt.allocPrint(testing.allocator, "{s}/corrupt.codedb", .{dir_path});

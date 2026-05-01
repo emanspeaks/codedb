@@ -6,6 +6,7 @@ const AgentRegistry = @import("agent.zig").AgentRegistry;
 const watcher = @import("watcher.zig");
 const mcp = @import("mcp.zig");
 const telemetry = @import("telemetry.zig");
+const compat = @import("compat.zig");
 
 const ToolBench = struct {
     tool: []const u8,
@@ -59,11 +60,11 @@ pub fn main(init: std.process.Init.Minimal) !void {
         break :blk false;
     };
 
-    var tmp_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var tmp_path_buf: [compat.path_buf_size]u8 = undefined;
     const tmp_root = try makeTempCorpusDir(io, &tmp_path_buf);
     defer std.Io.Dir.cwd().deleteTree(io, tmp_root) catch {};
 
-    var repo_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var repo_path_buf: [compat.path_buf_size]u8 = undefined;
     const repo_root_len = try std.Io.Dir.cwd().realPathFile(io, ".", &repo_path_buf);
     const repo_root = repo_path_buf[0..repo_root_len];
 
@@ -188,8 +189,7 @@ fn copyCorpus(io: std.Io, allocator: std.mem.Allocator, repo_root: []const u8, t
     }
 }
 
-
-fn makeTempCorpusDir(io: std.Io, buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+fn makeTempCorpusDir(io: std.Io, buf: *[compat.path_buf_size]u8) ![]const u8 {
     const base = cio.posixGetenv("TMPDIR") orelse "/tmp";
     const ns = cio.nanoTimestamp();
     const seed: u64 = @intCast(@as(u128, @bitCast(ns)) & 0xffff_ffff_ffff_ffff);
@@ -201,7 +201,7 @@ fn makeTempCorpusDir(io: std.Io, buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
     return path;
 }
 fn writeBenchTarget(io: std.Io, tmp_root: []const u8) !void {
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var path_buf: [compat.path_buf_size]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/src/bench_target.zig", .{tmp_root});
     const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
     defer file.close(io);

@@ -369,11 +369,7 @@ pub const WordIndex = struct {
             }
         }.lt);
 
-        const rand_suffix = @as(u64, blk: {
-            var ts: std.c.timespec = undefined;
-            _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-            break :blk @as(u64, @intCast(ts.nsec)) ^ (@as(u64, @intCast(ts.sec)) << 1);
-        });
+        const rand_suffix = @as(u64, @intCast(cio.nanoTimestamp()));
         const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}/word.index.{x}.tmp", .{ dir_path, rand_suffix });
         defer self.allocator.free(tmp_path);
         const final_path = try std.fmt.allocPrint(self.allocator, "{s}/word.index", .{dir_path});

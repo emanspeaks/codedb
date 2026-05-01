@@ -12,12 +12,19 @@ extern "c" fn write(fd: c_int, ptr: [*]const u8, len: usize) isize;
 extern "c" fn read(fd: c_int, ptr: [*]u8, len: usize) isize;
 extern "c" fn isatty(fd: c_int) c_int;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
-extern "c" fn clock_gettime(id: c_int, ts: *std.c.timespec) c_int;
 extern "c" fn pipe(fds: *[2]c_int) c_int;
 extern "c" fn close(fd: c_int) c_int;
 
-const CLOCK_REALTIME: c_int = 0;
-const CLOCK_MONOTONIC: c_int = if (builtin.os.tag == .macos) 6 else 1;
+const is_windows = builtin.os.tag == .windows;
+const is_posix = !is_windows;
+
+// POSIX-only — Windows time/sleep paths use ntdll directly below.
+const posix = if (is_posix) struct {
+    extern "c" fn clock_gettime(id: c_int, ts: *std.c.timespec) c_int;
+    extern "c" fn nanosleep(req: *const std.c.timespec, rem: ?*std.c.timespec) c_int;
+    const CLOCK_REALTIME: c_int = 0;
+    const CLOCK_MONOTONIC: c_int = if (builtin.os.tag == .macos) 6 else 1;
+} else struct {};
 
 // ── Stdio ────────────────────────────────────────────────────────────────
 
@@ -60,77 +67,140 @@ pub const File = struct {
 
 // ── Threads / Sync ───────────────────────────────────────────────────────
 
+// Windows SRWLock shared-mode declarations (stdlib only exposes Exclusive).
+const ntdll_srw = if (is_windows) struct {
+    extern "ntdll" fn RtlAcquireSRWLockShared(SRWLock: *std.os.windows.SRWLOCK) callconv(.winapi) void;
+    extern "ntdll" fn RtlReleaseSRWLockShared(SRWLock: *std.os.windows.SRWLOCK) callconv(.winapi) void;
+    extern "ntdll" fn RtlTryAcquireSRWLockShared(SRWLock: *std.os.windows.SRWLOCK) callconv(.winapi) std.os.windows.BOOLEAN;
+} else struct {};
+
 pub const Mutex = struct {
-    inner: std.c.pthread_mutex_t = .{},
+    inner: if (is_windows) std.os.windows.SRWLOCK else std.c.pthread_mutex_t = .{},
 
     pub fn lock(self: *Mutex) void {
-        _ = std.c.pthread_mutex_lock(&self.inner);
+        if (comptime is_windows) {
+            std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&self.inner);
+        } else {
+            _ = std.c.pthread_mutex_lock(&self.inner);
+        }
     }
     pub fn unlock(self: *Mutex) void {
-        _ = std.c.pthread_mutex_unlock(&self.inner);
+        if (comptime is_windows) {
+            std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&self.inner);
+        } else {
+            _ = std.c.pthread_mutex_unlock(&self.inner);
+        }
     }
     pub fn tryLock(self: *Mutex) bool {
+        if (comptime is_windows) {
+            return std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&self.inner).toBool();
+        }
         return std.c.pthread_mutex_trylock(&self.inner) == .SUCCESS;
     }
 };
 
 pub const RwLock = struct {
-    inner: std.c.pthread_rwlock_t = .{},
+    inner: if (is_windows) std.os.windows.SRWLOCK else std.c.pthread_rwlock_t = .{},
 
     pub fn lock(self: *RwLock) void {
-        _ = std.c.pthread_rwlock_wrlock(&self.inner);
+        if (comptime is_windows) {
+            std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&self.inner);
+        } else {
+            _ = std.c.pthread_rwlock_wrlock(&self.inner);
+        }
     }
     pub fn unlock(self: *RwLock) void {
-        _ = std.c.pthread_rwlock_unlock(&self.inner);
+        if (comptime is_windows) {
+            std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&self.inner);
+        } else {
+            _ = std.c.pthread_rwlock_unlock(&self.inner);
+        }
     }
     pub fn lockShared(self: *RwLock) void {
-        _ = std.c.pthread_rwlock_rdlock(&self.inner);
+        if (comptime is_windows) {
+            ntdll_srw.RtlAcquireSRWLockShared(&self.inner);
+        } else {
+            _ = std.c.pthread_rwlock_rdlock(&self.inner);
+        }
     }
     pub fn unlockShared(self: *RwLock) void {
-        _ = std.c.pthread_rwlock_unlock(&self.inner);
+        if (comptime is_windows) {
+            ntdll_srw.RtlReleaseSRWLockShared(&self.inner);
+        } else {
+            _ = std.c.pthread_rwlock_unlock(&self.inner);
+        }
     }
     pub fn tryLock(self: *RwLock) bool {
+        if (comptime is_windows) {
+            return std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&self.inner).toBool();
+        }
         return std.c.pthread_rwlock_trywrlock(&self.inner) == .SUCCESS;
     }
     pub fn tryLockShared(self: *RwLock) bool {
+        if (comptime is_windows) {
+            return ntdll_srw.RtlTryAcquireSRWLockShared(&self.inner).toBool();
+        }
         return std.c.pthread_rwlock_tryrdlock(&self.inner) == .SUCCESS;
     }
 };
 
 // ── Time ─────────────────────────────────────────────────────────────────
 
-pub fn nanoTimestamp() i128 {
+fn wallNowNs() i128 {
+    if (comptime is_windows) {
+        return @as(i128, std.os.windows.ntdll.RtlGetSystemTimePrecise()) * 100;
+    }
     var ts: std.c.timespec = undefined;
-    _ = clock_gettime(CLOCK_REALTIME, &ts);
+    _ = posix.clock_gettime(posix.CLOCK_REALTIME, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
 }
 
-pub fn milliTimestamp() i64 {
+// QPC frequency is fixed at boot; query once and reuse.
+var qpc_freq: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
+
+fn qpcFrequency() i64 {
+    var f = qpc_freq.load(.monotonic);
+    if (f != 0) return f;
+    _ = std.os.windows.ntdll.RtlQueryPerformanceFrequency(&f);
+    qpc_freq.store(f, .monotonic);
+    return f;
+}
+
+fn monoNowNs() i128 {
+    if (comptime is_windows) {
+        var counter: i64 = 0;
+        _ = std.os.windows.ntdll.RtlQueryPerformanceCounter(&counter);
+        const freq = qpcFrequency();
+        if (freq <= 0) return 0;
+        return @divTrunc(@as(i128, counter) * 1_000_000_000, @as(i128, freq));
+    }
     var ts: std.c.timespec = undefined;
-    _ = clock_gettime(CLOCK_REALTIME, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(ts.nsec, 1_000_000);
+    _ = posix.clock_gettime(posix.CLOCK_MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+}
+
+pub fn nanoTimestamp() i128 {
+    return wallNowNs();
+}
+
+pub fn milliTimestamp() i64 {
+    return @as(i64, @intCast(@divTrunc(wallNowNs(), std.time.ns_per_ms)));
 }
 
 pub const Timer = struct {
     start_ns: i128,
 
     pub fn start() !Timer {
-        var ts: std.c.timespec = undefined;
-        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-        return .{ .start_ns = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec };
+        return .{ .start_ns = monoNowNs() };
     }
 
     pub fn read(self: *Timer) u64 {
-        var ts: std.c.timespec = undefined;
-        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-        const now = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+        const now = monoNowNs();
         return @intCast(now - self.start_ns);
     }
 
     pub fn lap(self: *Timer) u64 {
-        var ts: std.c.timespec = undefined;
-        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
-        const now = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
+        const now = monoNowNs();
         const delta: u64 = @intCast(now - self.start_ns);
         self.start_ns = now;
         return delta;
@@ -144,12 +214,14 @@ pub const Timer = struct {
 /// suffix collision avoidance. Thread-safe: each thread gets a unique
 /// mix per-call even at the same nanosecond.
 pub fn randU64() u64 {
-    var ts: std.c.timespec = undefined;
-    _ = clock_gettime(CLOCK_REALTIME, &ts);
-    const ns = @as(u64, @intCast(ts.nsec));
-    const sec = @as(u64, @intCast(ts.sec));
+    const now_ns = wallNowNs();
+    const ns = @as(u64, @intCast(@mod(now_ns, std.time.ns_per_s)));
+    const sec = @as(u64, @intCast(@divTrunc(now_ns, std.time.ns_per_s)));
     const tid = std.Thread.getCurrentId();
-    const pid: u64 = @intCast(std.c.getpid());
+    const pid: u64 = if (comptime is_windows)
+        @as(u64, std.os.windows.GetCurrentProcessId())
+    else
+        @intCast(std.c.getpid());
     // splitmix64-style final mixing to avoid close-timestamp collisions
     var x = ns ^ (sec *% 2) ^ (tid *% (1 << 17)) ^ (pid *% (1 << 23));
     x ^= x >> 33;
@@ -161,11 +233,20 @@ pub fn randU64() u64 {
 }
 
 pub fn sleepMs(ms: u64) void {
+    if (comptime is_windows) {
+        const w = std.os.windows;
+        const max_ms: u64 = @intCast(@divTrunc(std.math.maxInt(i64), 10_000));
+        const bounded = @min(ms, max_ms);
+        const interval: i64 = -@as(i64, @intCast(bounded * 10_000));
+        _ = w.ntdll.NtDelayExecution(w.BOOLEAN.fromBool(false), &interval);
+        return;
+    }
+
     var ts: std.c.timespec = .{
         .sec = @intCast(ms / 1000),
         .nsec = @intCast((ms % 1000) * 1_000_000),
     };
-    _ = std.c.nanosleep(&ts, null);
+    _ = posix.nanosleep(&ts, null);
 }
 
 pub const PipeError = error{PipeFailed};
@@ -197,16 +278,38 @@ extern "c" fn _NSGetArgc() *c_int;
 extern "c" fn _NSGetArgv() *[*][*:0]u8;
 
 var process_args: ?[]const [*:0]const u8 = null;
+var process_args_windows: ?[]const u16 = null;
 
 /// Called once by `pub fn main` to register the argv slice on non-Darwin
 /// platforms. No-op on macOS (it reads from `_NSGetArgv` directly).
-pub fn setProcessArgs(args: []const [*:0]const u8) void {
-    process_args = args;
+pub fn setProcessArgs(args: anytype) void {
+    if (comptime builtin.os.tag == .windows) {
+        process_args_windows = args;
+    } else {
+        process_args = args;
+    }
 }
 
 /// Shim for cio.argsAlloc (removed in 0.16). Returns a duplicated
 /// slice of argv strings owned by the allocator; free with argsFree.
 pub fn argsAlloc(alloc: std.mem.Allocator) ![][:0]u8 {
+    if (comptime builtin.os.tag == .windows) {
+        const vec = process_args_windows orelse return error.ProcessArgsNotSet;
+        var it = try std.process.Args.Iterator.initAllocator(.{ .vector = vec }, alloc);
+        defer it.deinit();
+
+        var out: std.ArrayList([:0]u8) = .empty;
+        defer out.deinit(alloc);
+
+        while (it.next()) |arg| {
+            const dup = try alloc.allocSentinel(u8, arg.len, 0);
+            @memcpy(dup[0..arg.len], arg);
+            try out.append(alloc, dup);
+        }
+
+        return out.toOwnedSlice(alloc);
+    }
+
     const argc: usize = if (builtin.os.tag == .macos)
         @intCast(_NSGetArgc().*)
     else
@@ -327,6 +430,33 @@ const PosixSpawnFAStorage = [256]u8;
 pub fn runCapture(opts: RunOptions) !CaptureResult {
     if (opts.argv.len == 0) return error.EmptyArgv;
     const alloc = opts.allocator;
+
+    if (comptime builtin.os.tag == .windows) {
+        var threaded: std.Io.Threaded = .init(alloc, .{});
+        defer threaded.deinit();
+        const io = threaded.io();
+
+        const result = try std.process.run(alloc, io, .{
+            .argv = opts.argv,
+            .cwd = if (opts.cwd) |cwd| .{ .path = cwd } else .inherit,
+            .expand_arg0 = .expand,
+            .stdout_limit = .limited(opts.max_output_bytes),
+            .stderr_limit = .limited(opts.max_output_bytes),
+        });
+
+        const term: CaptureResult.Term = switch (result.term) {
+            .exited => |code| .{ .Exited = code },
+            .signal => |sig| .{ .Signal = @intFromEnum(sig) },
+            .stopped => |sig| .{ .Stopped = @intFromEnum(sig) },
+            .unknown => |val| .{ .Unknown = val },
+        };
+
+        return .{
+            .stdout = result.stdout,
+            .stderr = result.stderr,
+            .term = term,
+        };
+    }
 
     const c_argv = try alloc.alloc(?[*:0]const u8, opts.argv.len + 1);
     defer alloc.free(c_argv);

@@ -89,10 +89,22 @@ pub const Store = struct {
                 // Advisory lock for cross-process safety
                 const locked = if (comptime @import("builtin").os.tag == .windows) blk: {
                     const ntdll = std.os.windows.ntdll;
+                    const w = std.os.windows;
                     const max_off: i64 = std.math.maxInt(i64);
                     const zero_off: i64 = 0;
                     var iosb: std.os.windows.IO_STATUS_BLOCK = undefined;
-                    const status = ntdll.NtLockFile(log.handle, null, null, null, &iosb, &zero_off, &max_off, null, 0, 1);
+                    const status = ntdll.NtLockFile(
+                        log.handle,
+                        null,
+                        null,
+                        null,
+                        &iosb,
+                        &zero_off,
+                        &max_off,
+                        null,
+                        w.BOOLEAN.fromBool(false),
+                        w.BOOLEAN.fromBool(true),
+                    );
                     break :blk (status == .SUCCESS);
                 } else blk: {
                     log.lock(io, .exclusive) catch break :blk false;
@@ -104,7 +116,7 @@ pub const Store = struct {
                         const max_off: i64 = std.math.maxInt(i64);
                         const zero_off: i64 = 0;
                         var iosb2: std.os.windows.IO_STATUS_BLOCK = undefined;
-                        _ = ntdll.NtUnlockFile(log.handle, &iosb2, &zero_off, &max_off, null);
+                        _ = ntdll.NtUnlockFile(log.handle, &iosb2, &zero_off, &max_off, 0);
                     } else {
                         log.unlock(io);
                     }

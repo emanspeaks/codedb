@@ -1,6 +1,7 @@
 const std = @import("std");
 const cio = @import("cio.zig");
 const builtin = @import("builtin");
+const compat = @import("compat.zig");
 const explore = @import("explore.zig");
 const index = @import("index.zig");
 

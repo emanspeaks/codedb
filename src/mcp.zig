@@ -284,8 +284,7 @@ const ProjectCache = struct {
             const hash = std.hash.Wyhash.hash(0, p);
             var central_buf: [compat.path_buf_size]u8 = undefined;
             const loaded_central = blk: {
-                const home = cio.posixGetenv("HOME") orelse
-                    std.process.getEnvVarOwned(self.alloc, "USERPROFILE") catch break :blk false;
+                const home = cio.posixGetenv("HOME") orelse cio.posixGetenv("USERPROFILE") orelse break :blk false;
                 const central = std.fmt.bufPrint(&central_buf, "{s}/.codedb/projects/{x}/codedb.snapshot", .{ home, hash }) catch break :blk false;
                 break :blk snapshot_mod.loadSnapshot(io, central, &new_entry.explorer, &new_entry.store, self.alloc);
             };
@@ -870,7 +869,7 @@ noinline fn dispatch(
         .codedb_edit => @call(.never_inline, handleEdit, .{ io, alloc, args, out, default_store, default_explorer, agents }),
         .codedb_changes => handleChanges(alloc, args, out, default_store),
         .codedb_status => handleStatus(alloc, out, ctx.store, ctx.explorer),
-        .codedb_snapshot => @call(.never_inline, handleSnapshot, .{ alloc, out, ctx.explorer, ctx.store }, ctx.snapshot_cache),
+        .codedb_snapshot => @call(.never_inline, handleSnapshot, .{ alloc, out, ctx.explorer, ctx.store, ctx.snapshot_cache }),
         .codedb_bundle => @call(.never_inline, handleBundle, .{ io, alloc, args, out, ctx.store, ctx.explorer, agents, cache }),
         .codedb_remote => @call(.never_inline, handleRemote, .{ alloc, args, out }),
         .codedb_projects => @call(.never_inline, handleProjects, .{ io, alloc, out }),
@@ -1792,8 +1791,7 @@ fn handleRemote(alloc: std.mem.Allocator, args: *const std.json.ObjectMap, out: 
 // ── Local project tools ─────────────────────────────────────────────────────
 
 fn handleProjects(io: std.Io, alloc: std.mem.Allocator, out: *std.ArrayList(u8)) void {
-    const home = cio.posixGetenv("HOME") orelse
-        std.process.getEnvVarOwned(alloc, "USERPROFILE") catch {
+    const home = cio.posixGetenv("HOME") orelse cio.posixGetenv("USERPROFILE") orelse {
         out.appendSlice(alloc, "error: cannot read HOME/USERPROFILE") catch {};
         return;
     };
@@ -2832,7 +2830,7 @@ test "issue-258: cached project reads use the project root after contents are re
         .data = "const project = \"secondary\";\n",
     });
 
-    var project_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var project_path_buf: [compat.path_buf_size]u8 = undefined;
     const project_path_len = try tmp.dir.realPathFile(io, ".", &project_path_buf);
     const project_path = project_path_buf[0..project_path_len];
 
@@ -2845,7 +2843,7 @@ test "issue-258: cached project reads use the project root after contents are re
     defer testing.allocator.free(snap_path);
     try snapshot_mod.writeSnapshot(io, &snapshot_src, project_path, snap_path, testing.allocator);
 
-    var default_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var default_path_buf: [compat.path_buf_size]u8 = undefined;
     const default_path_len = try std.Io.Dir.cwd().realPathFile(io, ".", &default_path_buf);
     const default_path = default_path_buf[0..default_path_len];
 
@@ -2881,7 +2879,7 @@ test "ProjectCache loads project from central snapshot cache" {
         .data = "pub fn cachedProject() void {}\n",
     });
 
-    var project_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var project_path_buf: [compat.path_buf_size]u8 = undefined;
     const project_path_len = try tmp.dir.realPathFile(io, ".", &project_path_buf);
     const project_path = project_path_buf[0..project_path_len];
 
@@ -2909,7 +2907,7 @@ test "ProjectCache loads project from central snapshot cache" {
         return error.UnexpectedRootSnapshot;
     } else |_| {}
 
-    var default_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var default_path_buf: [compat.path_buf_size]u8 = undefined;
     const default_path_len = try std.Io.Dir.cwd().realPathFile(io, ".", &default_path_buf);
     const default_path = default_path_buf[0..default_path_len];
 

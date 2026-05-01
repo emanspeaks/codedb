@@ -1,6 +1,7 @@
 const std = @import("std");
 const cio = @import("cio.zig");
 const sty = @import("style.zig");
+const compat = @import("compat.zig");
 
 const Out = struct {
     file: cio.File,
@@ -37,7 +38,10 @@ pub fn run(io: std.Io, stdout: cio.File, s: sty.Style, allocator: std.mem.Alloca
 
     var stats = NukeStats{};
 
-    const self_pid = std.c.getpid();
+    const self_pid: u64 = if (comptime @import("builtin").os.tag == .windows)
+        @as(u64, std.os.windows.GetCurrentProcessId())
+    else
+        @intCast(std.c.getpid());
     stats.killed_processes = killOtherCodedbProcesses(allocator, self_pid, self_exe);
     stats.integrations_removed = deregisterInstalledIntegrations(io, allocator, home);
     stats.snapshots_removed = removeRegisteredSnapshots(io, allocator, home);
@@ -73,7 +77,7 @@ pub fn run(io: std.Io, stdout: cio.File, s: sty.Style, allocator: std.mem.Alloca
     out.p("\n  to reinstall: {s}curl -fsSL https://codedb.codegraff.com/install.sh | bash{s}\n", .{ s.cyan, s.reset });
 }
 
-fn killOtherCodedbProcesses(allocator: std.mem.Allocator, self_pid: std.c.pid_t, self_exe: ?[]const u8) usize {
+fn killOtherCodedbProcesses(allocator: std.mem.Allocator, self_pid: u64, self_exe: ?[]const u8) usize {
     const executable_path = self_exe orelse return 0;
     var killed: usize = 0;
     var pid_buf: [32]u8 = undefined;
@@ -203,13 +207,13 @@ fn removeInstalledBinaries(io: std.Io, home: []const u8, self_exe: ?[]const u8) 
         if (deleteFileIfExists(io, path)) removed += 1;
     }
 
-    var home_bin_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var home_bin_buf: [compat.path_buf_size]u8 = undefined;
     const home_bin = std.fmt.bufPrint(&home_bin_buf, "{s}/bin/codedb", .{home}) catch return removed;
     if (self_exe == null or !std.mem.eql(u8, self_exe.?, home_bin)) {
         if (deleteFileIfExists(io, home_bin)) removed += 1;
     }
 
-    var home_bin_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var home_bin_exe_buf: [compat.path_buf_size]u8 = undefined;
     const home_bin_exe = std.fmt.bufPrint(&home_bin_exe_buf, "{s}/bin/codedb.exe", .{home}) catch return removed;
     if ((self_exe == null or !std.mem.eql(u8, self_exe.?, home_bin_exe)) and !std.mem.eql(u8, home_bin, home_bin_exe)) {
         if (deleteFileIfExists(io, home_bin_exe)) removed += 1;
@@ -274,7 +278,6 @@ fn rewriteConfigFile(io: std.Io, allocator: std.mem.Allocator, path: []const u8,
     }
     try std.Io.Dir.rename(std.Io.Dir.cwd(), tmp_path, std.Io.Dir.cwd(), path, io);
 }
-
 
 pub fn removeJsonMcpServerEntry(allocator: std.mem.Allocator, content: []const u8, server_name: []const u8) !?[]u8 {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return null;

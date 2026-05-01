@@ -7,6 +7,7 @@ const TrigramIndex = idx.TrigramIndex;
 const MmapTrigramIndex = idx.MmapTrigramIndex;
 const AnyTrigramIndex = idx.AnyTrigramIndex;
 const SparseNgramIndex = idx.SparseNgramIndex;
+const compat = @import("compat.zig");
 
 pub const SymbolKind = enum(u8) {
     function,
@@ -1406,7 +1407,7 @@ pub const Explorer = struct {
         while (iter.next()) |entry| {
             for (entry.value_ptr.symbols.items) |sym| {
                 if (!std.mem.eql(u8, sym.name, name)) continue;
-                var key_buf: [std.fs.max_path_bytes + 32]u8 = undefined;
+                var key_buf: [compat.path_buf_size + 32]u8 = undefined;
                 const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ entry.key_ptr.*, sym.line_start }) catch continue;
                 if (seen.contains(key)) continue;
                 try result_list.append(allocator, .{

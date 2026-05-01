@@ -256,7 +256,9 @@ fn downloadAndReplaceBinary(io: std.Io, allocator: std.mem.Allocator, version: [
     {
         var tmp_file = try std.Io.Dir.openFileAbsolute(io, tmp_path, .{ .mode = .read_write });
         defer tmp_file.close(io);
-        try tmp_file.setPermissions(io, std.Io.File.Permissions.fromMode(0o755));
+        if (comptime builtin.os.tag != .windows) {
+            try tmp_file.setPermissions(io, std.Io.File.Permissions.fromMode(0o755));
+        }
     }
 
     try std.Io.Dir.renameAbsolute(tmp_path, dest_path, io);

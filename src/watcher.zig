@@ -1,5 +1,6 @@
 const std = @import("std");
 const cio = @import("cio.zig");
+const compat = @import("compat.zig");
 const Store = @import("store.zig").Store;
 const Explorer = @import("explore.zig").Explorer;
 const TrigramIndex = @import("index.zig").TrigramIndex;
@@ -40,8 +41,8 @@ pub const EventQueue = struct {
     // Heap-allocated: each ?FsEvent is ~1KB on Windows (compat.path_buf_size),
     // so an inline [4096]?FsEvent would be ~4MB — risky on constrained stacks.
     events: *[CAPACITY]?FsEvent,
-    head: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    tail: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+    head: usize = 0,
+    tail: usize = 0,
     mu: cio.Mutex = .{},
 
     pub fn init() !EventQueue {
@@ -311,7 +312,7 @@ const FilteredWalker = struct {
                     // Check .codedbignore patterns
                     if (self.ignore_patterns.items.len > 0) {
                         // Build full path for prefix matching
-                        var check_buf: [std.fs.max_path_bytes]u8 = undefined;
+                        var check_buf: [compat.path_buf_size]u8 = undefined;
                         const check_path = if (self.dir_prefix_len > 0)
                             std.fmt.bufPrint(&check_buf, "{s}/{s}", .{ self.name_buffer.items[0..self.dir_prefix_len], entry.name }) catch entry.name
                         else
@@ -1152,9 +1153,7 @@ fn indexFileContent(io: std.Io, explorer: *Explorer, dir: std.Io.Dir, path: []co
 fn drainNotifyFile(io: std.Io, store: *Store, explorer: *Explorer, queue: *EventQueue, known: *FileMap, root: []const u8, alloc: std.mem.Allocator) void {
     // Atomically read + truncate
     const notify_path = if (comptime @import("builtin").os.tag == .windows) blk: {
-        const tmp = std.process.getEnvVarOwned(alloc, "TEMP") catch
-            std.process.getEnvVarOwned(alloc, "TMP") catch return;
-        defer alloc.free(tmp);
+        const tmp = cio.posixGetenv("TEMP") orelse cio.posixGetenv("TMP") orelse return;
         break :blk std.fmt.allocPrint(alloc, "{s}\\codedb-notify", .{tmp}) catch return;
     } else "/tmp/codedb-notify";
     defer if (comptime @import("builtin").os.tag == .windows) alloc.free(notify_path);
@@ -1171,9 +1170,7 @@ fn drainNotifyFile(io: std.Io, store: *Store, explorer: *Explorer, queue: *Event
     if (n == 0) return;
     const data_slice = data[0..n];
 
-    // Truncate after reading (setEndPos is cross-platform)
-    file.seekTo(0) catch return;
-    file.setEndPos(0) catch return;
+    file.setLength(io, 0) catch return;
 
     // Re-index each notified path
     const dir = std.Io.Dir.cwd().openDir(io, root, .{}) catch return;

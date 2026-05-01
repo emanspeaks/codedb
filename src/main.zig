@@ -20,6 +20,7 @@ const telemetry = @import("telemetry.zig");
 const root_policy = @import("root_policy.zig");
 const nuke_mod = @import("nuke.zig");
 const update_mod = @import("update.zig");
+const compat = @import("compat.zig");
 const release_info = @import("release_info.zig");
 
 /// Thin wrapper: format + write to a File via allocator.
@@ -144,8 +145,7 @@ fn mainImpl() !void {
         root = ".";
     }
 
-    // var root_buf: [compat.path_buf_size]u8 = undefined;
-    var root_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var root_buf: [compat.path_buf_size]u8 = undefined;
     const abs_root = resolveRoot(io, root, &root_buf) catch {
         out.p("{s}\xe2\x9c\x97{s} cannot resolve root: {s}{s}{s}\n", .{
             s.red, s.reset, s.bold, root, s.reset,
@@ -632,8 +632,10 @@ fn mainImpl() !void {
         var shutdown = std.atomic.Value(bool).init(false);
 
         const queue = try allocator.create(watcher.EventQueue);
+        errdefer allocator.destroy(queue);
+        queue.* = try watcher.EventQueue.init();
+        defer queue.deinit();
         defer allocator.destroy(queue);
-        queue.* = watcher.EventQueue{};
 
         var scan_thread: ?std.Thread = null;
         var watch_thread: std.Thread = undefined;
@@ -713,7 +715,7 @@ fn isCommand(arg: []const u8) bool {
     return false;
 }
 
-fn resolveRoot(io: std.Io, root: []const u8, buf: *[std.fs.max_path_bytes]u8) ![]const u8 {
+fn resolveRoot(io: std.Io, root: []const u8, buf: *[compat.path_buf_size]u8) ![]const u8 {
     const sub = if (std.mem.eql(u8, root, ".")) "." else root;
     const n = std.Io.Dir.cwd().realPathFile(io, sub, buf) catch return error.ResolveFailed;
     return buf[0..n];
@@ -721,8 +723,7 @@ fn resolveRoot(io: std.Io, root: []const u8, buf: *[std.fs.max_path_bytes]u8) ![
 
 fn getDataDir(io: std.Io, allocator: std.mem.Allocator, abs_root: []const u8) ![]u8 {
     const hash = std.hash.Wyhash.hash(0, abs_root);
-    const home_env = cio.posixGetenv("HOME") orelse
-        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+    const home_env = cio.posixGetenv("HOME") orelse cio.posixGetenv("USERPROFILE") orelse {
         return std.fmt.allocPrint(allocator, "{s}/.codedb", .{abs_root});
     };
     const home = try allocator.dupe(u8, home_env);
