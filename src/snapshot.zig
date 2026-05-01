@@ -1006,7 +1006,8 @@ pub fn writeProjectCacheSnapshot(
 ) !void {
     const hash = std.hash.Wyhash.hash(0, root_path);
     const home_raw = cio.posixGetenv("HOME") orelse return;
-    const home = allocator.dupe(u8, home_raw) catch return;
+    const home = allocator.dupe(u8, home_raw) catch
+        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return;
     defer allocator.free(home);
     const secondary = std.fmt.allocPrint(allocator, "{s}/.codedb/projects/{x}/codedb.snapshot", .{ home, hash }) catch return;
     defer allocator.free(secondary);

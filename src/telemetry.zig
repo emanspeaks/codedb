@@ -40,7 +40,7 @@ pub const Telemetry = struct {
     write_offset: u64 = 0,
     enabled: bool = true,
     buf: [4096]u8 = undefined,
-    path_buf: [std.fs.max_path_bytes]u8 = undefined,
+    path_buf: [compat.path_buf_size]u8 = undefined,
     path_len: usize = 0,
     call_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     write_lock: cio.Mutex = .{},
@@ -169,8 +169,9 @@ pub const Telemetry = struct {
         const stat = std.Io.Dir.cwd().statFile(self.io, path, .{}) catch return;
         if (stat.size == 0) return;
 
-        // Use argv-based exec (no shell interpolation) to avoid injection
-        var data_arg_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+        // Use argv-based exec (no shell interpolation) to avoid injection.
+        // curl is available on modern Windows 10+ and all POSIX systems.
+        var data_arg_buf: [compat.path_buf_size + 1]u8 = undefined;
         const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{path}) catch return;
 
         const result = cio.runCapture(.{
