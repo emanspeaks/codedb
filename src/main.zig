@@ -143,6 +143,7 @@ fn mainImpl() !void {
         root = ".";
     }
 
+    // var root_buf: [compat.path_buf_size]u8 = undefined;
     var root_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_root = resolveRoot(io, root, &root_buf) catch {
         out.p("{s}\xe2\x9c\x97{s} cannot resolve root: {s}{s}{s}\n", .{
@@ -593,7 +594,7 @@ fn mainImpl() !void {
         defer reap_thread.join();
 
         std.log.info("codedb: {d} files indexed, listening on :{d}", .{ store.currentSeq(), port });
-        try server.serve(io, allocator, &store, &agents, &explorer, queue, port);
+        try server.serve(io, allocator, &store, &agents, &explorer, &queue, port);
     } else if (std.mem.eql(u8, cmd, "mcp")) {
         var agents = AgentRegistry.init(allocator);
         defer agents.deinit();
@@ -675,6 +676,7 @@ fn mainImpl() !void {
             watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ io, &store, &explorer, queue, root, &shutdown, &scan_done });
         }
 
+        // const watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ &store, &explorer, &queue, root, &shutdown, &scan_done });
         const idle_thread = try std.Thread.spawn(.{}, idleWatchdog, .{&shutdown});
 
         std.log.info("codedb mcp: root={s} files={d} data={s} scan={s}", .{ abs_root, store.currentSeq(), data_dir, mcp_server.getScanState().name() });
@@ -683,7 +685,9 @@ fn mainImpl() !void {
 
         shutdown.store(true, .release);
         if (scan_thread) |st| st.join();
-        if (maybe_deferred) |d| { if (d.scan_thread) |st| st.join(); }
+        if (maybe_deferred) |d| {
+            if (d.scan_thread) |st| st.join();
+        }
         watch_thread.join();
         idle_thread.join();
     } else {
@@ -1130,19 +1134,32 @@ fn idleWatchdog(shutdown: *std.atomic.Value(bool)) void {
         // Do not close a healthy stdio transport just because it is idle:
         // MCP stdio sessions are not resumable, and hosts such as Codex do
         // not necessarily respawn a dead server inside an existing chat.
-        var poll_fds = [_]std.posix.pollfd{.{
-            .fd = stdin.handle,
-            .events = std.posix.POLL.IN | std.posix.POLL.HUP,
-            .revents = 0,
-        }};
-        const poll_result = std.posix.poll(&poll_fds, 0) catch 0;
-        if (poll_result > 0 and (poll_fds[0].revents & std.posix.POLL.HUP) != 0) {
-            std.log.info("stdin closed (client disconnected), exiting", .{});
-            _ = std.c.close(stdin.handle);
-            shutdown.store(true, .release);
-            return;
+        // Windows stdin is not a socket, so poll() is POSIX-only.
+        if (comptime @import("builtin").os.tag != .windows) {
+            var poll_fds = [_]std.posix.pollfd{.{
+                .fd = stdin.handle,
+                .events = std.posix.POLL.IN | std.posix.POLL.HUP,
+                .revents = 0,
+            }};
+            const poll_result = std.posix.poll(&poll_fds, 0) catch 0;
+            if (poll_result > 0 and (poll_fds[0].revents & std.posix.POLL.HUP) != 0) {
+                std.log.info("stdin closed (client disconnected), exiting", .{});
+                _ = std.c.close(stdin.handle);
+                shutdown.store(true, .release);
+                return;
+            }
         }
 
+        // // Idle timeout (primary exit mechanism on Windows)
+        // const last = mcp.last_activity.load(.acquire);
+        // if (last == 0) continue;
+        // const now = std.time.milliTimestamp();
+        // if (now - last > mcp.idle_timeout_ms) {
+        //     std.log.info("idle for {d}s, exiting", .{@divTrunc(now - last, 1000)});
+        //     stdin.close();
+        //     shutdown.store(true, .release);
+        //     return;
+        // }
         cio.sleepMs(mcp.dead_client_poll_ms);
     }
 }
