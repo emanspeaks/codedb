@@ -1624,6 +1624,19 @@ test "isPathSafe: accepts valid relative paths" {
     try testing.expect(mcp.isPathSafe("a/b/c/d.txt"));
 }
 
+test "isPathSafe: rejects Windows-style paths" {
+    const mcp = @import("mcp.zig");
+    // Backslash prefix
+    try testing.expect(!mcp.isPathSafe("\\Windows\\System32"));
+    // Drive letters
+    try testing.expect(!mcp.isPathSafe("C:\\Windows\\System32"));
+    try testing.expect(!mcp.isPathSafe("D:\\secret.txt"));
+    // Backslash traversal
+    try testing.expect(!mcp.isPathSafe("foo\\..\\..\\etc\\passwd"));
+    // Mixed separators with traversal
+    try testing.expect(!mcp.isPathSafe("foo/..\\..\\secret"));
+}
+
 test "snapshot_json: snapshot builds and is valid JSON" {
     // Explorer uses arena for internal data
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -4010,7 +4023,13 @@ test "issue-60: telemetry disabled path is a no-op" {
 test "issue-77: mcp index accepts temporary-directory roots that cause pathological cache growth" {
     var tmp_name_buf: [128]u8 = undefined;
     const tmp_name = try std.fmt.bufPrint(&tmp_name_buf, "codedb-issue-77-{d}", .{@as(i64, @intCast(@divTrunc(cio.nanoTimestamp(), 1000)))});
-    const tmp_root = try std.fs.path.join(testing.allocator, &.{ "/private/tmp", tmp_name });
+    const tmp_base = if (comptime @import("builtin").os.tag == .windows)
+        std.process.getEnvVarOwned(testing.allocator, "TEMP") catch
+            return error.SkipZigTest
+    else
+        try testing.allocator.dupe(u8, "/private/tmp");
+    defer testing.allocator.free(tmp_base);
+    const tmp_root = try std.fs.path.join(testing.allocator, &.{ tmp_base, tmp_name });
     defer testing.allocator.free(tmp_root);
 
     std.Io.Dir.cwd().createDirPath(io, tmp_root) catch |err| switch (err) {
