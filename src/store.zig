@@ -87,11 +87,28 @@ pub const Store = struct {
             if (self.data_log) |log| {
                 const io = self.io orelse return error.Unexpected;
                 // Advisory lock for cross-process safety
-                const locked = blk: {
+                const locked = if (comptime @import("builtin").os.tag == .windows) blk: {
+                    const ntdll = std.os.windows.ntdll;
+                    const max_off: i64 = std.math.maxInt(i64);
+                    const zero_off: i64 = 0;
+                    var iosb: std.os.windows.IO_STATUS_BLOCK = undefined;
+                    const status = ntdll.NtLockFile(log.handle, null, null, null, &iosb, &zero_off, &max_off, null, 0, 1);
+                    break :blk (status == .SUCCESS);
+                } else blk: {
                     log.lock(io, .exclusive) catch break :blk false;
                     break :blk true;
                 };
-                defer if (locked) log.unlock(io);
+                defer if (locked) {
+                    if (comptime @import("builtin").os.tag == .windows) {
+                        const ntdll = std.os.windows.ntdll;
+                        const max_off: i64 = std.math.maxInt(i64);
+                        const zero_off: i64 = 0;
+                        var iosb2: std.os.windows.IO_STATUS_BLOCK = undefined;
+                        _ = ntdll.NtUnlockFile(log.handle, &iosb2, &zero_off, &max_off, null);
+                    } else {
+                        log.unlock(io);
+                    }
+                };
 
                 // Re-stat to get current end position (another process may have appended)
                 const end_pos = log.length(io) catch return error.Unexpected;
