@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cio = @import("cio.zig");
 const testing = std.testing;
 const io = std.testing.io;
 const compat = @import("compat.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 const Store = @import("store.zig").Store;
 const ChangeEntry = @import("store.zig").ChangeEntry;
@@ -3022,7 +3025,7 @@ test "perf regression: word index lookup under 100ns per query" {
     const elapsed_ns = timer.read();
     const ns_per_query = elapsed_ns / (iters * queries.len);
     // Word lookup must be under 500ns in debug — typically ~5ns in release
-    const threshold_ns: u64 = if (comptime @import("builtin").os.tag == .windows) 2_000 else 500;
+    const threshold_ns: u64 = if (comptime is_windows) 2_000 else 500;
     try testing.expect(ns_per_query < threshold_ns);
 }
 
@@ -4025,7 +4028,7 @@ test "issue-60: telemetry disabled path is a no-op" {
 test "issue-77: mcp index accepts temporary-directory roots that cause pathological cache growth" {
     var tmp_name_buf: [128]u8 = undefined;
     const tmp_name = try std.fmt.bufPrint(&tmp_name_buf, "codedb-issue-77-{d}", .{@as(i64, @intCast(@divTrunc(cio.nanoTimestamp(), 1000)))});
-    const tmp_base = if (comptime @import("builtin").os.tag == .windows) blk: {
+    const tmp_base = if (comptime is_windows) blk: {
         const t = cio.posixGetenv("TEMP") orelse cio.posixGetenv("TMP") orelse return error.SkipZigTest;
         break :blk try testing.allocator.dupe(u8, t);
     } else try testing.allocator.dupe(u8, "/private/tmp");
@@ -5034,7 +5037,7 @@ test "issue-150: --help prints usage" {
 
     try buildCliForHelpTests();
 
-    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+    const codedb_path = if (comptime is_windows)
         "./zig-out/bin/codedb.exe"
     else
         "./zig-out/bin/codedb";
@@ -5064,7 +5067,7 @@ test "issue-150: -h prints usage" {
 
     try buildCliForHelpTests();
 
-    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+    const codedb_path = if (comptime is_windows)
         "./zig-out/bin/codedb.exe"
     else
         "./zig-out/bin/codedb";
@@ -5088,7 +5091,7 @@ fn buildCliForHelpTests() !void {
     const repo_root = try resolveRepoRootForTests(testing.allocator);
     defer testing.allocator.free(repo_root);
 
-    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+    const codedb_path = if (comptime is_windows)
         try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb.exe" })
     else
         try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb" });
@@ -5311,7 +5314,7 @@ test "issue-148: dead MCP clients are polled every second" {
 }
 
 test "issue-148: POLLHUP detects closed pipe" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (comptime is_windows) return error.SkipZigTest;
     // Verify the polling infrastructure works for pipe-based transports
     const pipe = try cio.makePipe();
     defer _ = std.c.close(pipe[0]);
@@ -5398,7 +5401,7 @@ test "issue-278: MCP session may remain idle longer than old timeout" {
 }
 
 test "issue-148: open pipe does not trigger HUP" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (comptime is_windows) return error.SkipZigTest;
 
     const pipe = try cio.makePipe();
     defer _ = std.c.close(pipe[0]);
@@ -5421,7 +5424,7 @@ test "issue-148: codedb mcp exits when stdin is closed" {
 
     try buildCliForHelpTests();
 
-    const codedb_path = if (comptime @import("builtin").os.tag == .windows)
+    const codedb_path = if (comptime is_windows)
         try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb.exe" })
     else
         try std.fs.path.join(testing.allocator, &.{ repo_root, "zig-out", "bin", "codedb" });
@@ -5474,7 +5477,7 @@ const MmapTrigramIndex = @import("index.zig").MmapTrigramIndex;
 const AnyTrigramIndex = @import("index.zig").AnyTrigramIndex;
 
 test "issue-164: mmap trigram index returns same candidates as heap index" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (comptime is_windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -5516,7 +5519,7 @@ test "issue-164: mmap trigram index returns same candidates as heap index" {
 }
 
 test "issue-164: mmap binary search on sorted lookup table" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (comptime is_windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -5558,7 +5561,7 @@ test "issue-164: mmap handles missing files gracefully" {
 }
 
 test "issue-164: AnyTrigramIndex dispatches to mmap variant" {
-    if (comptime @import("builtin").os.tag == .windows) return error.SkipZigTest;
+    if (comptime is_windows) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

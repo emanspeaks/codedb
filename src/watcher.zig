@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cio = @import("cio.zig");
 const compat = @import("compat.zig");
 const Store = @import("store.zig").Store;
@@ -6,6 +7,8 @@ const Explorer = @import("explore.zig").Explorer;
 const TrigramIndex = @import("index.zig").TrigramIndex;
 const explore_mod = @import("explore.zig");
 const git_mod = @import("git.zig");
+
+const is_windows = builtin.os.tag == .windows;
 pub const EventKind = enum(u8) {
     created,
     modified,
@@ -171,7 +174,7 @@ const skip_dirs = [_][]const u8{
 };
 
 fn isSep(c: u8) bool {
-    return c == '/' or (comptime @import("builtin").os.tag == .windows and c == '\\');
+    return c == '/' or (comptime is_windows and c == '\\');
 }
 
 fn shouldSkip(path: []const u8) bool {
@@ -1152,11 +1155,11 @@ fn indexFileContent(io: std.Io, explorer: *Explorer, dir: std.Io.Dir, path: []co
 
 fn drainNotifyFile(io: std.Io, store: *Store, explorer: *Explorer, queue: *EventQueue, known: *FileMap, root: []const u8, alloc: std.mem.Allocator) void {
     // Atomically read + truncate
-    const notify_path = if (comptime @import("builtin").os.tag == .windows) blk: {
+    const notify_path = if (comptime is_windows) blk: {
         const tmp = cio.posixGetenv("TEMP") orelse cio.posixGetenv("TMP") orelse return;
         break :blk std.fmt.allocPrint(alloc, "{s}\\codedb-notify", .{tmp}) catch return;
     } else "/tmp/codedb-notify";
-    defer if (comptime @import("builtin").os.tag == .windows) alloc.free(notify_path);
+    defer if (comptime is_windows) alloc.free(notify_path);
     const file = std.Io.Dir.cwd().openFile(io, notify_path, .{ .mode = .read_write }) catch return;
     defer file.close(io);
 
@@ -1170,6 +1173,7 @@ fn drainNotifyFile(io: std.Io, store: *Store, explorer: *Explorer, queue: *Event
     if (n == 0) return;
     const data_slice = data[0..n];
 
+    // Truncate after reading
     file.setLength(io, 0) catch return;
 
     // Re-index each notified path
@@ -1190,7 +1194,7 @@ fn drainNotifyFile(io: std.Io, store: *Store, explorer: *Explorer, queue: *Event
         // Normalize backslashes to forward slashes so the path matches the
         // walker's convention and avoids duplicate entries in the explorer.
         var norm_buf: [compat.path_buf_size]u8 = undefined;
-        const rel = if (comptime @import("builtin").os.tag == .windows) blk: {
+        const rel = if (comptime is_windows) blk: {
             if (raw_rel.len > norm_buf.len) continue;
             @memcpy(norm_buf[0..raw_rel.len], raw_rel);
             const s = norm_buf[0..raw_rel.len];

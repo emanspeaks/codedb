@@ -5,7 +5,6 @@ const Store = @import("store.zig").Store;
 const AgentRegistry = @import("agent.zig").AgentRegistry;
 const Explorer = @import("explore.zig").Explorer;
 const watcher = @import("watcher.zig");
-const is_windows = @import("builtin").os.tag == .windows;
 const server = @import("server.zig");
 const mcp_server = @import("mcp.zig");
 const sty = @import("style.zig");
@@ -573,36 +572,31 @@ fn mainImpl() !void {
             s.reset,
         });
     } else if (std.mem.eql(u8, cmd, "serve")) {
-        if (comptime is_windows) {
-            out.p("{s}\xe2\x9c\x97{s} HTTP serve not supported on Windows. Use {s}mcp{s} mode.\n", .{
-                s.red, s.reset, s.cyan, s.reset,
-            });
-            std.process.exit(1);
-        } else {
-            const port: u16 = blk: {
-                const raw = cio.posixGetenv("CODEDB_PORT") orelse break :blk 6767;
-                break :blk std.fmt.parseInt(u16, raw, 10) catch 6767;
-            };
-            var agents = AgentRegistry.init(allocator);
-            defer agents.deinit();
-            _ = try agents.register("__filesystem__");
+        const port: u16 = blk: {
+            const raw = cio.posixGetenv("CODEDB_PORT") orelse break :blk 6767;
+            break :blk std.fmt.parseInt(u16, raw, 10) catch 6767;
+        };
+        var agents = AgentRegistry.init(allocator);
+        defer agents.deinit();
+        _ = try agents.register("__filesystem__");
 
-            var shutdown = std.atomic.Value(bool).init(false);
-            defer shutdown.store(true, .release);
-            var scan_already_done = std.atomic.Value(bool).init(true);
+        var shutdown = std.atomic.Value(bool).init(false);
+        defer shutdown.store(true, .release);
+        var scan_already_done = std.atomic.Value(bool).init(true);
 
-            const queue = try allocator.create(watcher.EventQueue);
-            defer allocator.destroy(queue);
-            queue.* = watcher.EventQueue{};
-            const watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ io, &store, &explorer, queue, root, &shutdown, &scan_already_done });
-            defer watch_thread.join();
+        const queue = try allocator.create(watcher.EventQueue);
+        errdefer allocator.destroy(queue);
+        queue.* = try watcher.EventQueue.init();
+        defer queue.deinit();
+        defer allocator.destroy(queue);
+        const watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ io, &store, &explorer, queue, root, &shutdown, &scan_already_done });
+        defer watch_thread.join();
 
-            const reap_thread = try std.Thread.spawn(.{}, reapLoop, .{ &agents, &shutdown });
-            defer reap_thread.join();
+        const reap_thread = try std.Thread.spawn(.{}, reapLoop, .{ &agents, &shutdown });
+        defer reap_thread.join();
 
-            std.log.info("codedb: {d} files indexed, listening on :{d}", .{ store.currentSeq(), port });
-            try server.serve(io, allocator, &store, &agents, &explorer, &queue, port);
-        }
+        std.log.info("codedb: {d} files indexed, listening on :{d}", .{ store.currentSeq(), port });
+        try server.serve(io, allocator, &store, &agents, &explorer, queue, port);
     } else if (std.mem.eql(u8, cmd, "mcp")) {
         var agents = AgentRegistry.init(allocator);
         defer agents.deinit();
@@ -686,7 +680,6 @@ fn mainImpl() !void {
             watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ io, &store, &explorer, queue, root, &shutdown, &scan_done });
         }
 
-        // const watch_thread = try std.Thread.spawn(.{}, watcher.incrementalLoop, .{ &store, &explorer, &queue, root, &shutdown, &scan_done });
         const idle_thread = try std.Thread.spawn(.{}, idleWatchdog, .{&shutdown});
 
         std.log.info("codedb mcp: root={s} files={d} data={s} scan={s}", .{ abs_root, store.currentSeq(), data_dir, mcp_server.getScanState().name() });
@@ -695,9 +688,7 @@ fn mainImpl() !void {
 
         shutdown.store(true, .release);
         if (scan_thread) |st| st.join();
-        if (maybe_deferred) |d| {
-            if (d.scan_thread) |st| st.join();
-        }
+        if (maybe_deferred) |d| { if (d.scan_thread) |st| st.join(); }
         watch_thread.join();
         idle_thread.join();
     } else {
@@ -1144,8 +1135,8 @@ fn idleWatchdog(shutdown: *std.atomic.Value(bool)) void {
         // Do not close a healthy stdio transport just because it is idle:
         // MCP stdio sessions are not resumable, and hosts such as Codex do
         // not necessarily respawn a dead server inside an existing chat.
-        // Windows stdin is not a socket, so poll() is POSIX-only.
-        if (comptime @import("builtin").os.tag != .windows) {
+        // Windows stdin is not pollable via std.posix.poll, so this is POSIX-only.
+        if (comptime builtin.os.tag != .windows) {
             var poll_fds = [_]std.posix.pollfd{.{
                 .fd = stdin.handle,
                 .events = std.posix.POLL.IN | std.posix.POLL.HUP,
@@ -1159,17 +1150,6 @@ fn idleWatchdog(shutdown: *std.atomic.Value(bool)) void {
                 return;
             }
         }
-
-        // // Idle timeout (primary exit mechanism on Windows)
-        // const last = mcp.last_activity.load(.acquire);
-        // if (last == 0) continue;
-        // const now = std.time.milliTimestamp();
-        // if (now - last > mcp.idle_timeout_ms) {
-        //     std.log.info("idle for {d}s, exiting", .{@divTrunc(now - last, 1000)});
-        //     stdin.close();
-        //     shutdown.store(true, .release);
-        //     return;
-        // }
         cio.sleepMs(mcp.dead_client_poll_ms);
     }
 }

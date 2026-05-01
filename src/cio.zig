@@ -12,19 +12,15 @@ extern "c" fn write(fd: c_int, ptr: [*]const u8, len: usize) isize;
 extern "c" fn read(fd: c_int, ptr: [*]u8, len: usize) isize;
 extern "c" fn isatty(fd: c_int) c_int;
 extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
+extern "c" fn clock_gettime(id: c_int, ts: *std.c.timespec) c_int;
 extern "c" fn pipe(fds: *[2]c_int) c_int;
 extern "c" fn close(fd: c_int) c_int;
 
 const is_windows = builtin.os.tag == .windows;
 const is_posix = !is_windows;
 
-// POSIX-only — Windows time/sleep paths use ntdll directly below.
-const posix = if (is_posix) struct {
-    extern "c" fn clock_gettime(id: c_int, ts: *std.c.timespec) c_int;
-    extern "c" fn nanosleep(req: *const std.c.timespec, rem: ?*std.c.timespec) c_int;
-    const CLOCK_REALTIME: c_int = 0;
-    const CLOCK_MONOTONIC: c_int = if (builtin.os.tag == .macos) 6 else 1;
-} else struct {};
+const CLOCK_REALTIME: c_int = 0;
+const CLOCK_MONOTONIC: c_int = if (builtin.os.tag == .macos) 6 else 1;
 
 // ── Stdio ────────────────────────────────────────────────────────────────
 
@@ -67,7 +63,7 @@ pub const File = struct {
 
 // ── Threads / Sync ───────────────────────────────────────────────────────
 
-// Windows SRWLock shared-mode declarations (stdlib only exposes Exclusive).
+// Windows SRWLock shared-mode (stdlib only exposes Exclusive variants).
 const ntdll_srw = if (is_windows) struct {
     extern "ntdll" fn RtlAcquireSRWLockShared(SRWLock: *std.os.windows.SRWLOCK) callconv(.winapi) void;
     extern "ntdll" fn RtlReleaseSRWLockShared(SRWLock: *std.os.windows.SRWLOCK) callconv(.winapi) void;
@@ -146,61 +142,66 @@ pub const RwLock = struct {
 
 // ── Time ─────────────────────────────────────────────────────────────────
 
-fn wallNowNs() i128 {
+// Windows monotonic time via QPC (used by Timer below).
+fn winMonoNs() i128 {
+    var counter: i64 = 0;
+    var freq: i64 = 0;
+    _ = std.os.windows.ntdll.RtlQueryPerformanceCounter(&counter);
+    _ = std.os.windows.ntdll.RtlQueryPerformanceFrequency(&freq);
+    if (freq <= 0) return 0;
+    return @divTrunc(@as(i128, counter) * 1_000_000_000, @as(i128, freq));
+}
+
+pub fn nanoTimestamp() i128 {
     if (comptime is_windows) {
         return @as(i128, std.os.windows.ntdll.RtlGetSystemTimePrecise()) * 100;
     }
     var ts: std.c.timespec = undefined;
-    _ = posix.clock_gettime(posix.CLOCK_REALTIME, &ts);
+    _ = clock_gettime(CLOCK_REALTIME, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
-}
-
-// QPC frequency is fixed at boot; query once and reuse.
-var qpc_freq: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
-
-fn qpcFrequency() i64 {
-    var f = qpc_freq.load(.monotonic);
-    if (f != 0) return f;
-    _ = std.os.windows.ntdll.RtlQueryPerformanceFrequency(&f);
-    qpc_freq.store(f, .monotonic);
-    return f;
-}
-
-fn monoNowNs() i128 {
-    if (comptime is_windows) {
-        var counter: i64 = 0;
-        _ = std.os.windows.ntdll.RtlQueryPerformanceCounter(&counter);
-        const freq = qpcFrequency();
-        if (freq <= 0) return 0;
-        return @divTrunc(@as(i128, counter) * 1_000_000_000, @as(i128, freq));
-    }
-    var ts: std.c.timespec = undefined;
-    _ = posix.clock_gettime(posix.CLOCK_MONOTONIC, &ts);
-    return @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
-}
-
-pub fn nanoTimestamp() i128 {
-    return wallNowNs();
 }
 
 pub fn milliTimestamp() i64 {
-    return @as(i64, @intCast(@divTrunc(wallNowNs(), std.time.ns_per_ms)));
+    if (comptime is_windows) {
+        return @intCast(@divTrunc(std.os.windows.ntdll.RtlGetSystemTimePrecise(), 10_000));
+    }
+    var ts: std.c.timespec = undefined;
+    _ = clock_gettime(CLOCK_REALTIME, &ts);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(ts.nsec, 1_000_000);
 }
 
 pub const Timer = struct {
     start_ns: i128,
 
     pub fn start() !Timer {
-        return .{ .start_ns = monoNowNs() };
+        if (comptime is_windows) {
+            return .{ .start_ns = winMonoNs() };
+        }
+        var ts: std.c.timespec = undefined;
+        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+        return .{ .start_ns = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec };
     }
 
     pub fn read(self: *Timer) u64 {
-        const now = monoNowNs();
+        if (comptime is_windows) {
+            return @intCast(winMonoNs() - self.start_ns);
+        }
+        var ts: std.c.timespec = undefined;
+        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+        const now = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
         return @intCast(now - self.start_ns);
     }
 
     pub fn lap(self: *Timer) u64 {
-        const now = monoNowNs();
+        if (comptime is_windows) {
+            const now = winMonoNs();
+            const delta: u64 = @intCast(now - self.start_ns);
+            self.start_ns = now;
+            return delta;
+        }
+        var ts: std.c.timespec = undefined;
+        _ = clock_gettime(CLOCK_MONOTONIC, &ts);
+        const now = @as(i128, ts.sec) * 1_000_000_000 + ts.nsec;
         const delta: u64 = @intCast(now - self.start_ns);
         self.start_ns = now;
         return delta;
@@ -214,14 +215,27 @@ pub const Timer = struct {
 /// suffix collision avoidance. Thread-safe: each thread gets a unique
 /// mix per-call even at the same nanosecond.
 pub fn randU64() u64 {
-    const now_ns = wallNowNs();
-    const ns = @as(u64, @intCast(@mod(now_ns, std.time.ns_per_s)));
-    const sec = @as(u64, @intCast(@divTrunc(now_ns, std.time.ns_per_s)));
+    if (comptime is_windows) {
+        const t: u64 = @intCast(std.os.windows.ntdll.RtlGetSystemTimePrecise());
+        const total_ns = t * 100;
+        const ns = total_ns % 1_000_000_000;
+        const sec = total_ns / 1_000_000_000;
+        const tid = std.Thread.getCurrentId();
+        const pid: u64 = std.os.windows.GetCurrentProcessId();
+        var x = ns ^ (sec *% 2) ^ (tid *% (1 << 17)) ^ (pid *% (1 << 23));
+        x ^= x >> 33;
+        x *%= 0xff51afd7ed558ccd;
+        x ^= x >> 33;
+        x *%= 0xc4ceb9fe1a85ec53;
+        x ^= x >> 33;
+        return x;
+    }
+    var ts: std.c.timespec = undefined;
+    _ = clock_gettime(CLOCK_REALTIME, &ts);
+    const ns = @as(u64, @intCast(ts.nsec));
+    const sec = @as(u64, @intCast(ts.sec));
     const tid = std.Thread.getCurrentId();
-    const pid: u64 = if (comptime is_windows)
-        @as(u64, std.os.windows.GetCurrentProcessId())
-    else
-        @intCast(std.c.getpid());
+    const pid: u64 = @intCast(std.c.getpid());
     // splitmix64-style final mixing to avoid close-timestamp collisions
     var x = ns ^ (sec *% 2) ^ (tid *% (1 << 17)) ^ (pid *% (1 << 23));
     x ^= x >> 33;
@@ -241,12 +255,11 @@ pub fn sleepMs(ms: u64) void {
         _ = w.ntdll.NtDelayExecution(w.BOOLEAN.fromBool(false), &interval);
         return;
     }
-
     var ts: std.c.timespec = .{
         .sec = @intCast(ms / 1000),
         .nsec = @intCast((ms % 1000) * 1_000_000),
     };
-    _ = posix.nanosleep(&ts, null);
+    _ = std.c.nanosleep(&ts, null);
 }
 
 pub const PipeError = error{PipeFailed};
@@ -282,8 +295,9 @@ var process_args_windows: ?[]const u16 = null;
 
 /// Called once by `pub fn main` to register the argv slice on non-Darwin
 /// platforms. No-op on macOS (it reads from `_NSGetArgv` directly).
+/// On Windows, accepts the UTF-16 command-line buffer instead.
 pub fn setProcessArgs(args: anytype) void {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime is_windows) {
         process_args_windows = args;
     } else {
         process_args = args;
@@ -293,23 +307,19 @@ pub fn setProcessArgs(args: anytype) void {
 /// Shim for cio.argsAlloc (removed in 0.16). Returns a duplicated
 /// slice of argv strings owned by the allocator; free with argsFree.
 pub fn argsAlloc(alloc: std.mem.Allocator) ![][:0]u8 {
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime is_windows) {
         const vec = process_args_windows orelse return error.ProcessArgsNotSet;
         var it = try std.process.Args.Iterator.initAllocator(.{ .vector = vec }, alloc);
         defer it.deinit();
-
         var out: std.ArrayList([:0]u8) = .empty;
         defer out.deinit(alloc);
-
         while (it.next()) |arg| {
             const dup = try alloc.allocSentinel(u8, arg.len, 0);
             @memcpy(dup[0..arg.len], arg);
             try out.append(alloc, dup);
         }
-
         return out.toOwnedSlice(alloc);
     }
-
     const argc: usize = if (builtin.os.tag == .macos)
         @intCast(_NSGetArgc().*)
     else
@@ -431,11 +441,10 @@ pub fn runCapture(opts: RunOptions) !CaptureResult {
     if (opts.argv.len == 0) return error.EmptyArgv;
     const alloc = opts.allocator;
 
-    if (comptime builtin.os.tag == .windows) {
+    if (comptime is_windows) {
         var threaded: std.Io.Threaded = .init(alloc, .{});
         defer threaded.deinit();
         const io = threaded.io();
-
         const result = try std.process.run(alloc, io, .{
             .argv = opts.argv,
             .cwd = if (opts.cwd) |cwd| .{ .path = cwd } else .inherit,
@@ -443,14 +452,12 @@ pub fn runCapture(opts: RunOptions) !CaptureResult {
             .stdout_limit = .limited(opts.max_output_bytes),
             .stderr_limit = .limited(opts.max_output_bytes),
         });
-
         const term: CaptureResult.Term = switch (result.term) {
             .exited => |code| .{ .Exited = code },
             .signal => |sig| .{ .Signal = @intFromEnum(sig) },
             .stopped => |sig| .{ .Stopped = @intFromEnum(sig) },
             .unknown => |val| .{ .Unknown = val },
         };
-
         return .{
             .stdout = result.stdout,
             .stderr = result.stderr,
